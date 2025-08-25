@@ -126,9 +126,17 @@ function showCaptureModal(data) {
       }
     });
 
-    // Focus on comment textarea
+    // Focus on comment textarea and add Enter key handler
     if (commentArea) {
       setTimeout(() => commentArea.focus(), 100);
+      
+      // Handle Enter key to save note (Ctrl+Enter or just Enter)
+      commentArea.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          saveNote(data);
+        }
+      });
     }
     
     console.log('Modal setup complete');
