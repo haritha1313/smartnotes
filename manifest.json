@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Smart Notes Capture",
+  "version": "0.1.0",
+  "description": "Capture text from any webpage with comments and organize your notes",
+  "permissions": ["storage", "activeTab", "contextMenus"],
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["content/content.js"],
+    "css": ["content/modal.css"]
+  }],
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Smart Notes"
+  }
+}
