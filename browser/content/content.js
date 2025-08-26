@@ -4,6 +4,13 @@ let selectedText = '';
 // Ensure content script is ready
 console.log('Smart Notes content script loaded on:', window.location.href);
 
+// Check if we're in a frame/iframe and skip injection there
+if (window.self !== window.top) {
+  console.log('Smart Notes: Skipping injection in iframe/frame');
+} else {
+  console.log('Smart Notes: Initializing in main frame');
+}
+
 // Listen for text selection
 document.addEventListener('mouseup', () => {
   const selection = window.getSelection();
@@ -67,6 +74,20 @@ function showCaptureModal(data) {
   // Validate data
   if (!data || !data.text) {
     console.error('No text data provided to modal');
+    showNotification('No text selected', 'error');
+    return;
+  }
+
+  // Skip if we're in an iframe
+  if (window.self !== window.top) {
+    console.log('Smart Notes: Skipping modal in iframe');
+    return;
+  }
+  
+  // Check if document.body is available
+  if (!document.body) {
+    console.error('Document body not available for modal injection');
+    showNotification('Page not ready for notes capture', 'error');
     return;
   }
   
@@ -109,40 +130,71 @@ function showCaptureModal(data) {
     document.body.appendChild(modal);
     console.log('Modal appended to body');
 
-    // Add event listeners with error handling
-    const cancelBtn = document.getElementById('smart-notes-cancel');
-    const closeBtn = document.querySelector('.smart-notes-close');
-    const saveBtn = document.getElementById('smart-notes-save');
-    const commentArea = document.getElementById('smart-notes-comment');
+    // Use a small delay to ensure DOM is fully updated
+    setTimeout(() => {
+      try {
+        // Add event listeners with error handling
+        const cancelBtn = document.getElementById('smart-notes-cancel');
+        const closeBtn = document.querySelector('.smart-notes-close');
+        const saveBtn = document.getElementById('smart-notes-save');
+        const commentArea = document.getElementById('smart-notes-comment');
 
-    if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
-    if (closeBtn) closeBtn.addEventListener('click', closeModal);
-    if (saveBtn) saveBtn.addEventListener('click', () => saveNote(data));
-    
-    // Close modal when clicking outside
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) {
-        closeModal();
-      }
-    });
-
-    // Focus on comment textarea and add Enter key handler
-    if (commentArea) {
-      setTimeout(() => commentArea.focus(), 100);
-      
-      // Handle Enter key to save note (Ctrl+Enter or just Enter)
-      commentArea.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          saveNote(data);
+        if (cancelBtn) {
+          cancelBtn.addEventListener('click', closeModal);
+        } else {
+          console.warn('Cancel button not found');
         }
-      });
-    }
-    
-    console.log('Modal setup complete');
+        
+        if (closeBtn) {
+          closeBtn.addEventListener('click', closeModal);
+        } else {
+          console.warn('Close button not found');
+        }
+        
+        if (saveBtn) {
+          saveBtn.addEventListener('click', () => saveNote(data));
+        } else {
+          console.warn('Save button not found');
+        }
+        
+        // Close modal when clicking outside
+        modal.addEventListener('click', (e) => {
+          if (e.target === modal) {
+            closeModal();
+          }
+        });
+
+        // Focus on comment textarea and add Enter key handler
+        if (commentArea) {
+          setTimeout(() => {
+            try {
+              commentArea.focus();
+            } catch (focusError) {
+              console.warn('Could not focus comment area:', focusError);
+            }
+          }, 100);
+          
+          // Handle Enter key to save note (Ctrl+Enter or just Enter)
+          commentArea.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              saveNote(data);
+            }
+          });
+        } else {
+          console.warn('Comment textarea not found');
+        }
+        
+        console.log('Modal setup complete');
+      } catch (setupError) {
+        console.error('Error setting up modal event listeners:', setupError);
+        showNotification('Modal setup failed, but modal is visible', 'error');
+      }
+    }, 50);
     
   } catch (error) {
     console.error('Error setting up modal:', error);
+    showNotification('Failed to show capture modal', 'error');
   }
 }
 
@@ -155,6 +207,18 @@ function closeModal() {
 
 function saveNote(data) {
   const comment = document.getElementById('smart-notes-comment').value.trim();
+  const saveBtn = document.getElementById('smart-notes-save');
+  const cancelBtn = document.getElementById('smart-notes-cancel');
+
+  // Show loading state
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+    saveBtn.style.opacity = '0.7';
+  }
+  if (cancelBtn) {
+    cancelBtn.disabled = true;
+  }
 
   const note = {
     id: generateId(),
@@ -166,18 +230,94 @@ function saveNote(data) {
     category: suggestCategory(data.url)
   };
 
+  console.log('Content: Saving note:', note);
+
   // Send to background script for storage
   chrome.runtime.sendMessage({
     action: 'saveNote',
     note: note
   }, (response) => {
+    console.log('Content: Save response:', response);
+    
+    // Reset button states
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Note';
+      saveBtn.style.opacity = '1';
+    }
+    if (cancelBtn) {
+      cancelBtn.disabled = false;
+    }
+
     if (response && response.success) {
-      console.log('Note saved successfully');
-      closeModal();
+      console.log('Content: Note saved successfully via:', response.method);
+      console.log('Content: Sync status:', response.syncStatus);
+      
+      // Show detailed success message based on sync status
+      let notificationMessage = '✓ Note saved locally';
+      if (response.syncStatus === 'notion_synced') {
+        notificationMessage = '🎉 Note saved and synced to Notion!';
+      } else if (response.syncStatus === 'notion_pending') {
+        notificationMessage = '⏳ Note saved, syncing to Notion...';
+      } else if (response.syncStatus === 'notion_failed') {
+        notificationMessage = '⚠️ Note saved locally, Notion sync failed';
+      } else if (response.method === 'api') {
+        notificationMessage = '✓ Note saved to server';
+      }
+      
+      showNotification(notificationMessage, 'success');
+      
+      // Log Notion page ID if available
+      if (response.notionPageId) {
+        console.log('Content: Notion page created:', response.notionPageId);
+      }
+      
+      // Close modal after short delay
+      setTimeout(() => {
+        closeModal();
+      }, 2000); // Slightly longer delay to read the Notion status
     } else {
-      console.error('Failed to save note');
+      console.error('Content: Failed to save note:', response?.error);
+      
+      // Show error message
+      const errorMsg = response?.error || 'Unknown error occurred';
+      showNotification(`✗ Failed to save: ${errorMsg}`, 'error');
     }
   });
+}
+
+// Show notification messages to user
+function showNotification(message, type = 'info') {
+  try {
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.className = `smart-notes-notification ${type}`;
+    notification.textContent = message;
+    
+    // Ensure body exists before appending
+    if (document.body) {
+      document.body.appendChild(notification);
+    } else {
+      console.warn('Document body not available for notification');
+      return;
+    }
+
+    // Auto-remove after 3 seconds
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.classList.add('slide-out');
+        setTimeout(() => {
+          if (notification.parentNode) {
+            notification.parentNode.removeChild(notification);
+          }
+        }, 300);
+      }
+    }, 3000);
+  } catch (error) {
+    console.error('Error showing notification:', error);
+    // Fallback to console log if notification fails
+    console.log(`Smart Notes: ${message}`);
+  }
 }
 
 function generateId() {

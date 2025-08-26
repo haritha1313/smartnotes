@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Notes Extension Test Page</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        .test-section {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .highlight {
+            background: #fff3cd;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+        
+        h1, h2 {
+            color: #333;
+        }
+        
+        .instructions {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        
+        .api-status {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        
+        code {
+            background: #f1f3f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Smart Notes Extension - Test Page</h1>
+    
+    <div class="instructions">
+        <h3>📋 Testing Instructions</h3>
+        <ol>
+            <li>Load the extension in Chrome: <code>chrome://extensions/</code></li>
+            <li>Enable "Developer mode"</li>
+            <li>Click "Load unpacked" and select the <code>browser/</code> folder</li>
+            <li>Select any text below and right-click → "Add to Notes"</li>
+            <li>Test with and without the backend API running</li>
+        </ol>
+    </div>
+
+    <div class="api-status">
+        <h3>🔌 API Status</h3>
+        <p>Backend API should be running on: <code>http://localhost:8000</code></p>
+        <p><strong>Without API:</strong> Notes will be saved locally with notification "Note saved locally"</p>
+        <p><strong>With API:</strong> Notes will be saved to server with notification "Note saved to server"</p>
+    </div>
+
+    <div class="test-section">
+        <h2>Test Content #1: Technical Article</h2>
+        <p>
+            This is a sample paragraph about <span class="highlight">JavaScript async/await patterns</span> 
+            that you can select to test the Smart Notes extension. The extension should automatically 
+            categorize this content and allow you to add personal comments.
+        </p>
+        
+        <p>
+            Select this text: <strong>Async/await is a syntactic sugar built on top of Promises that makes 
+            asynchronous code look and feel more like synchronous code.</strong> This should trigger the 
+            context menu when you right-click.
+        </p>
+    </div>
+
+    <div class="test-section">
+        <h2>Test Content #2: Research Notes</h2>
+        <p>
+            Here's another test paragraph containing <span class="highlight">important research findings</span>
+            about user behavior in web applications. This content should be easy to capture and organize.
+        </p>
+        
+        <blockquote style="border-left: 4px solid #007bff; padding-left: 15px; color: #666;">
+            "The best interfaces are almost invisible to the user. They accomplish a task without 
+            drawing unnecessary attention to the mechanics of the interface."
+        </blockquote>
+    </div>
+
+    <div class="test-section">
+        <h2>Test Content #3: Code Examples</h2>
+        <p>
+            Test selecting code snippets: <code>const result = await apiClient.post('/api/notes', noteData);</code>
+        </p>
+        
+        <p>
+            Or longer code blocks that might contain useful information for future reference.
+            The extension should handle various types of content gracefully.
+        </p>
+    </div>
+
+    <div class="test-section">
+        <h2>🧪 Expected Behavior</h2>
+        <ul>
+            <li><strong>Text Selection:</strong> Select any text above</li>
+            <li><strong>Context Menu:</strong> Right-click → should see "Add to Notes"</li>
+            <li><strong>Modal Display:</strong> Modal should appear with selected text</li>
+            <li><strong>Loading State:</strong> "Save Note" button should show "Saving..." when clicked</li>
+            <li><strong>Success Notification:</strong> Green notification should appear</li>
+            <li><strong>API Integration:</strong> 
+                <ul>
+                    <li>With API running: "Note saved to server" + ☁ icon in popup</li>
+                    <li>Without API: "Note saved locally" + ⏳ icon in popup</li>
+                </ul>
+            </li>
+            <li><strong>Popup View:</strong> Click extension icon to see saved notes with sync status</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>🐛 Troubleshooting</h2>
+        <ul>
+            <li><strong>Context menu not appearing:</strong> Check extension is loaded and enabled</li>
+            <li><strong>Modal not showing:</strong> Check browser console for errors</li>
+            <li><strong>API errors:</strong> Check Network tab for failed requests</li>
+            <li><strong>Permission errors:</strong> Ensure host_permissions in manifest.json</li>
+            <li><strong>Works on test page but not other sites:</strong> See external website testing below</li>
+        </ul>
+        
+        <h3>Testing on External Websites</h3>
+        <ol>
+            <li>Go to any external website (e.g., <a href="https://example.com" target="_blank">example.com</a>)</li>
+            <li>Open Developer Tools (F12)</li>
+            <li>Go to Console tab</li>
+            <li>Look for "Smart Notes content script loaded" message</li>
+            <li>If not present, reload the extension and refresh the page</li>
+        </ol>
+        
+        <h3>Debug Helper</h3>
+        <p>Copy and paste this into the console on any website to debug:</p>
+        <code style="display: block; background: #f1f3f4; padding: 10px; margin: 10px 0; white-space: pre-wrap;">
+// Load debug helper
+const script = document.createElement('script');
+script.src = chrome.runtime.getURL('debug.js');
+document.head.appendChild(script);
+        </code>
+        
+        <p><strong>Console Logs:</strong> Open Developer Tools to see detailed logging from content and background scripts.</p>
+    </div>
+
+    <div class="test-section">
+        <h2>🌐 External Website Test List</h2>
+        <p>Test the extension on these common websites:</p>
+        <ul>
+            <li><a href="https://en.wikipedia.org/wiki/JavaScript" target="_blank">Wikipedia</a> - Test on reference content</li>
+            <li><a href="https://stackoverflow.com/questions/tagged/javascript" target="_blank">Stack Overflow</a> - Test on technical content</li>
+            <li><a href="https://github.com/microsoft/vscode" target="_blank">GitHub</a> - Test on development content</li>
+            <li><a href="https://news.ycombinator.com" target="_blank">Hacker News</a> - Test on discussion content</li>
+            <li><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript" target="_blank">MDN</a> - Test on documentation</li>
+        </ul>
+        
+        <p><strong>Expected behavior on all sites:</strong></p>
+        <ul>
+            <li>Console shows "Smart Notes content script loaded"</li>
+            <li>Right-click on selected text shows "Add to Notes"</li>
+            <li>Modal appears with selected text</li>
+            <li>Save button shows loading state</li>
+            <li>Success notification appears</li>
+        </ul>
+    </div>
+
+    <script>
+        // Add some dynamic content for testing
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Test page loaded - ready for Smart Notes extension testing');
+            
+            // Log when text is selected
+            document.addEventListener('mouseup', function() {
+                const selection = window.getSelection().toString().trim();
+                if (selection.length > 0) {
+                    console.log('Text selected:', selection);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

@@ -104,12 +104,19 @@ function createNoteHTML(note) {
   const commentHTML = note.comment 
     ? `<div class="note-comment">"${escapeHtml(note.comment)}"</div>`
     : '';
+
+  // Add sync status indicator
+  const syncStatus = note.syncStatus || 'unknown';
+  const syncHTML = getSyncStatusHTML(syncStatus, note.lastError);
   
   return `
     <div class="note-item">
       <div class="note-header">
         <span class="note-category ${categoryClass}">${escapeHtml(note.category)}</span>
-        <span class="note-timestamp">${timestamp}</span>
+        <div class="note-header-right">
+          ${syncHTML}
+          <span class="note-timestamp">${timestamp}</span>
+        </div>
       </div>
       
       <div class="note-text">${escapeHtml(note.text)}</div>
@@ -126,6 +133,20 @@ function createNoteHTML(note) {
       </div>
     </div>
   `;
+}
+
+function getSyncStatusHTML(syncStatus, lastError) {
+  switch (syncStatus) {
+    case 'synced':
+      return '<span class="sync-status synced" title="Synced to server">☁</span>';
+    case 'pending':
+      return '<span class="sync-status pending" title="Saved locally, pending sync">⏳</span>';
+    case 'failed':
+      const errorTitle = lastError ? `Sync failed: ${lastError}` : 'Sync failed';
+      return `<span class="sync-status failed" title="${errorTitle}">⚠</span>`;
+    default:
+      return '<span class="sync-status unknown" title="Unknown sync status">📱</span>';
+  }
 }
 
 function setupEventListeners() {

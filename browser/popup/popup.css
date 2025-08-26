@@ -114,6 +114,12 @@ body {
   margin-bottom: 8px;
 }
 
+.note-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .note-category {
   background: #e9ecef;
   color: #495057;
@@ -140,6 +146,27 @@ body {
 .note-timestamp {
   font-size: 11px;
   color: #666;
+}
+
+.sync-status {
+  font-size: 12px;
+  cursor: help;
+}
+
+.sync-status.synced {
+  color: #28a745;
+}
+
+.sync-status.pending {
+  color: #ffc107;
+}
+
+.sync-status.failed {
+  color: #dc3545;
+}
+
+.sync-status.unknown {
+  color: #6c757d;
 }
 
 .note-text {

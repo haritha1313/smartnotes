@@ -40,6 +40,9 @@ pids/
 *.pem
 key.pem
 
+# Extension config with secrets (use config.template.js instead)
+browser/config.js
+
 # Environment variables
 .env
 .env.local
