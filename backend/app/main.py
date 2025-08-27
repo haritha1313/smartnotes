@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
     print(f"   Environment: {settings.environment}")
     print(f"   Debug: {settings.debug}")
     print(f"   Rate Limit: {settings.rate_limit_requests} req/{settings.rate_limit_window}s")
+    print(f"   Allowed Methods: {settings.allowed_methods}")
+    print(f"   Allowed Origins: {settings.allowed_origins}")
+    print(f"   Allowed Headers: {settings.allowed_headers}")
     
     yield
     
@@ -51,18 +54,18 @@ app = FastAPI(
 
 # Add middleware in reverse order (last added = first executed)
 
-# 1. Security headers (outermost)
-app.add_middleware(SecurityHeadersMiddleware)
-
-# 2. CORS with restrictive settings
+# 1. CORS FIRST (most important for browser extension)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
-    allow_credentials=True,
+    allow_credentials=False,  # Must be False when allow_origins=["*"]
     allow_methods=settings.allowed_methods,
     allow_headers=settings.allowed_headers,
     max_age=600,  # Cache preflight for 10 minutes
 )
+
+# 2. Security headers (after CORS)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # 3. Gzip compression for better performance
 app.add_middleware(GZipMiddleware, minimum_size=1000)

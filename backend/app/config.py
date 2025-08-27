@@ -21,17 +21,17 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     
-    # CORS Configuration (restrictive by default)
-    allowed_origins: List[str] = [
-        "http://localhost:3000",
-        "chrome-extension://*"
-    ]
-    allowed_methods: List[str] = ["GET", "POST", "PUT", "DELETE"]
+    # CORS Configuration (browser extension friendly)
+    allowed_origins: List[str] = ["*"]  # Allow all origins for browser extension
+    allowed_methods: List[str] = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
     allowed_headers: List[str] = [
         "Content-Type",
         "Authorization", 
         "X-Notion-Token",
-        "X-Notion-Database-Id"
+        "X-Notion-Database-Id",
+        "Access-Control-Allow-Origin",
+        "Access-Control-Allow-Methods",
+        "Access-Control-Allow-Headers"
     ]
     
     # Rate Limiting (per IP)
@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     notion_redirect_uri: str = "http://localhost:8000/api/auth/notion/callback"
     notion_token: str = ""  # For direct integration testing
     notion_database_id: str = ""  # For direct database testing
+    
+    # AI Configuration for categorization
+    claude_api_key: str = ""
+    claude_model: str = "claude-3-haiku-20240307"  # Fast and cheap for categorization
     
     # Database Configuration
     database_url: str = "sqlite:///./notes.db"
@@ -89,7 +93,8 @@ SECURITY_HEADERS = {
     "X-XSS-Protection": "1; mode=block",
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "Referrer-Policy": "strict-origin-when-cross-origin",
-    "Content-Security-Policy": "default-src 'self'",
+    # Remove CSP for now to avoid blocking browser extension requests
+    # "Content-Security-Policy": "default-src 'self'",
 }
 
 # Input validation patterns

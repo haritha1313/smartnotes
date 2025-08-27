@@ -8,8 +8,8 @@ console.log('Background: Config embedded');
 console.log('Background: TOKEN present:', !!NOTION_CONFIG.TOKEN);
 console.log('Background: DATABASE_ID present:', !!NOTION_CONFIG.DATABASE_ID);
 
-// API Client functionality
-const apiClient = {
+// Background-specific API Client functionality (renamed to avoid conflict)
+const backgroundApiClient = {
   async getAuthToken() {
     try {
       const result = await chrome.storage.local.get(['authToken']);
@@ -146,6 +146,8 @@ async function sendMessageWithRetry(tabId, message, maxRetries = 3) {
 
 // Handle messages from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log('Background: Received message:', message.action);
+  
   if (message.action === 'saveNote') {
     saveNote(message.note)
       .then((result) => {
@@ -168,56 +170,112 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       });
     
-    // Return true to indicate we'll send a response asynchronously
-    return true;
+    return true; // Keep channel open for async response
+  }
+  
+  if (message.action === 'categorizeContent') {
+    handleCategorizeContent(message.data)
+      .then(result => sendResponse(result))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    
+    return true; // Keep channel open for async response
+  }
+  
+  if (message.action === 'warmCache') {
+    handleWarmCache()
+      .then(result => sendResponse(result))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    
+    return true; // Keep channel open for async response
+  }
+  
+  if (message.action === 'updateNoteWithAI') {
+    updateNoteWithAI(message.noteId, message.updatedNote)
+      .then(result => sendResponse(result))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    
+    return true; // Keep channel open for async response
   }
 });
 
-// Save note with API integration and local storage fallback
+// Save note with AI processing first, then API integration
 async function saveNote(note) {
-  console.log('Background: Attempting to save note:', note);
+  console.log('Background: Attempting to save note with AI processing:', note);
   
   try {
-    // Try to save to API first
-    const apiResult = await saveNoteToAPI(note);
+    let finalNote = note;
+    
+    // If note needs AI processing, do it first
+    if (note.needsAI) {
+      console.log('Background: Processing note with AI first...');
+      
+      try {
+        const aiResult = await handleCategorizeContent({
+          content: note.text,
+          comment: note.comment || ''
+        });
+        
+        if (aiResult && aiResult.success && aiResult.data) {
+          const { title: aiTitle, category: aiCategory } = aiResult.data;
+          
+          // Update note with AI improvements
+          finalNote = {
+            ...note,
+            title: aiTitle || note.title,
+            category: aiCategory || note.category,
+            aiProcessed: true,
+            needsAI: false
+          };
+          
+          console.log('Background: AI processing complete, enhanced note:', finalNote);
+        } else {
+          console.warn('Background: AI processing failed, using original note');
+        }
+      } catch (aiError) {
+        console.warn('Background: AI processing error, using original note:', aiError);
+      }
+    }
+    
+    // Now save the final note (with or without AI improvements) to API
+    const apiResult = await saveNoteToAPI(finalNote);
     
     if (apiResult.success) {
       console.log('Background: Note saved to API successfully');
       
-      // Also save to local storage as backup
-      await saveNoteToLocalStorage(note, { 
-        ...note, 
+      // Save to local storage as backup
+      await saveNoteToLocalStorage(finalNote, { 
+        ...finalNote, 
         syncStatus: 'synced',
         apiNoteId: apiResult.data?.data?.note_id 
       });
       
-        // Check if Notion sync was successful
-        const syncStatus = apiResult.data?.data?.sync_status || 'unknown';
-        const notionPageId = apiResult.data?.data?.notion_page_id;
-        
-        let message = 'Note saved to API successfully';
-        if (syncStatus === 'notion_synced') {
-          message = 'Note saved and synced to Notion!';
-        } else if (syncStatus === 'notion_pending') {
-          message = 'Note saved, syncing to Notion in background...';
-        } else if (syncStatus === 'notion_failed') {
-          message = 'Note saved locally, Notion sync failed';
-        }
-        
-        return { 
-          success: true, 
-          method: 'api',
-          noteId: apiResult.data?.data?.note_id,
-          syncStatus: syncStatus,
-          notionPageId: notionPageId,
-          message: message
-        };
+      // Check if Notion sync was successful
+      const syncStatus = apiResult.data?.data?.sync_status || 'unknown';
+      const notionPageId = apiResult.data?.data?.notion_page_id;
+      
+      let message = 'Note saved to API successfully';
+      if (syncStatus === 'notion_synced') {
+        message = 'Note saved and synced to Notion!';
+      } else if (syncStatus === 'notion_pending') {
+        message = 'Note saved, syncing to Notion in background...';
+      } else if (syncStatus === 'notion_failed') {
+        message = 'Note saved locally, Notion sync failed';
+      }
+      
+      return { 
+        success: true, 
+        method: 'api',
+        noteId: apiResult.data?.data?.note_id,
+        syncStatus: syncStatus,
+        notionPageId: notionPageId,
+        message: message
+      };
     } else {
       console.log('Background: API save failed, falling back to local storage');
       
       // Fallback to local storage
-      await saveNoteToLocalStorage(note, { 
-        ...note, 
+      await saveNoteToLocalStorage(finalNote, { 
+        ...finalNote, 
         syncStatus: 'pending',
         lastError: apiResult.error 
       });
@@ -267,7 +325,7 @@ async function saveNoteToAPI(note) {
     console.log('Background: Sending to API:', apiNote);
     console.log('Background: Using Notion config:', NOTION_CONFIG.TOKEN ? 'Token present' : 'No token', NOTION_CONFIG.DATABASE_ID ? 'DB ID present' : 'No DB ID');
     
-    return await apiClient.post(API_CONFIG.ENDPOINTS.NOTES, apiNote);
+    return await backgroundApiClient.post(API_CONFIG.ENDPOINTS.NOTES, apiNote);
   } catch (error) {
     console.error('Background: API save error:', error);
     return { success: false, error: error.message };
@@ -303,6 +361,93 @@ async function getAllNotes() {
     return result.notes || [];
   } catch (error) {
     console.error('Error getting notes:', error);
+    throw error;
+  }
+}
+
+// Handle AI categorization requests (bypasses CORS)
+async function handleCategorizeContent(requestData) {
+  try {
+    console.log('Background: Making categorization request');
+    
+    const response = await fetch(API_CONFIG.BASE_URL + '/api/notes/categorize', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Notion-Token': NOTION_CONFIG.TOKEN,
+        'X-Notion-Database-Id': NOTION_CONFIG.DATABASE_ID
+      },
+      body: JSON.stringify(requestData)
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API returned ${response.status}: ${response.statusText} - ${errorText}`);
+    }
+    
+    const result = await response.json();
+    console.log('Background: AI categorization successful');
+    return result;
+    
+  } catch (error) {
+    console.error('Background: AI categorization failed:', error);
+    throw error;
+  }
+}
+
+// Handle cache warming requests (bypasses CORS)
+async function handleWarmCache() {
+  try {
+    console.log('Background: Making cache warm request');
+    
+    const response = await fetch(API_CONFIG.BASE_URL + '/api/notes/warm-cache', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Notion-Token': NOTION_CONFIG.TOKEN,
+        'X-Notion-Database-Id': NOTION_CONFIG.DATABASE_ID
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Cache warm failed: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    console.log('Background: Cache warming successful');
+    return result;
+    
+  } catch (error) {
+    console.error('Background: Cache warming failed:', error);
+    throw error;
+  }
+}
+
+// Update a saved note with AI-generated improvements
+async function updateNoteWithAI(noteId, updatedNote) {
+  try {
+    console.log('Background: Updating note with AI improvements', noteId);
+    
+    // Update in local storage
+    const result = await chrome.storage.local.get(['notes']);
+    const notes = result.notes || [];
+    
+    const noteIndex = notes.findIndex(note => note.id === noteId);
+    if (noteIndex !== -1) {
+      notes[noteIndex] = { ...notes[noteIndex], ...updatedNote };
+      await chrome.storage.local.set({ notes: notes });
+      console.log('Background: Note updated in local storage');
+    }
+    
+    // Don't sync AI improvements to Notion immediately to avoid duplicates
+    // The original note is already saved to Notion with basic info
+    // AI improvements are stored locally and can be synced later if needed
+    console.log('Background: AI improvements stored locally (not syncing to avoid duplicates)');
+    
+    return { success: true, method: 'local_updated' };
+    
+  } catch (error) {
+    console.error('Background: Failed to update note with AI:', error);
     throw error;
   }
 }

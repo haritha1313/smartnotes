@@ -91,40 +91,60 @@ function showCaptureModal(data) {
     return;
   }
   
-  // Remove existing modal if any
+  // Remove existing tooltip if any
   const existingModal = document.getElementById('smart-notes-modal');
   if (existingModal) {
-    console.log('Removing existing modal');
+    console.log('Removing existing tooltip');
     existingModal.remove();
   }
 
-  // Create modal overlay
+  // Get selection position for tooltip placement
+  const selection = window.getSelection();
+  let rect = null;
+  if (selection.rangeCount > 0) {
+    rect = selection.getRangeAt(0).getBoundingClientRect();
+  }
+
+  // Create floating tooltip
   const modal = document.createElement('div');
   modal.id = 'smart-notes-modal';
-  modal.className = 'smart-notes-overlay';
+  modal.className = 'smart-notes-floating-tooltip';
   
   modal.innerHTML = `
-    <div class="smart-notes-modal">
-      <div class="smart-notes-header">
-        <h3>Add to Notes</h3>
+    <div class="smart-notes-tooltip-content">
+      <div class="smart-notes-input-row">
+        <textarea id="smart-notes-comment" 
+                 placeholder="💬 Add comment (optional)... Press Enter to save!" 
+                 rows="1"></textarea>
+        <button id="smart-notes-save" class="smart-notes-save-btn">💾</button>
         <button class="smart-notes-close">&times;</button>
       </div>
-      <div class="smart-notes-content">
-        <div class="smart-notes-selected-text">
-          <label>Selected Text:</label>
-          <div class="smart-notes-text-preview">${data.text}</div>
-        </div>
-        <div class="smart-notes-comment-section">
-          <label for="smart-notes-comment">Your Comment (optional):</label>
-          <textarea id="smart-notes-comment" placeholder="Add your thoughts about this text..."></textarea>
-        </div>
-      </div>
-      <div class="smart-notes-actions">
-        <button id="smart-notes-cancel" class="smart-notes-btn-secondary">Cancel</button>
-        <button id="smart-notes-save" class="smart-notes-btn-primary">Save Note</button>
+      <div class="smart-notes-ai-hint">
+        🤖 AI will categorize automatically
       </div>
     </div>
   `;
+
+  // Position tooltip near selection or center of viewport
+  const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+  const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+  
+  let top, left;
+  
+  if (rect && rect.width > 0 && rect.height > 0) {
+    // Position below the selection with some margin
+    top = rect.bottom + scrollY + 10;
+    left = Math.max(10, Math.min(rect.left + scrollX, window.innerWidth - 320));
+  } else {
+    // Fallback: center of current viewport
+    top = scrollY + (window.innerHeight / 2) - 50;
+    left = scrollX + (window.innerWidth / 2) - 150;
+  }
+  
+  modal.style.position = 'absolute';
+  modal.style.top = `${top}px`;
+  modal.style.left = `${left}px`;
+  modal.style.zIndex = '2147483647';
 
   try {
     document.body.appendChild(modal);
@@ -134,16 +154,9 @@ function showCaptureModal(data) {
     setTimeout(() => {
       try {
         // Add event listeners with error handling
-        const cancelBtn = document.getElementById('smart-notes-cancel');
-        const closeBtn = document.querySelector('.smart-notes-close');
-        const saveBtn = document.getElementById('smart-notes-save');
-        const commentArea = document.getElementById('smart-notes-comment');
-
-        if (cancelBtn) {
-          cancelBtn.addEventListener('click', closeModal);
-        } else {
-          console.warn('Cancel button not found');
-        }
+        const closeBtn = modal.querySelector('.smart-notes-close');
+        const saveBtn = modal.querySelector('.smart-notes-save-btn') || modal.querySelector('#smart-notes-save');
+        const commentArea = modal.querySelector('#smart-notes-comment');
         
         if (closeBtn) {
           closeBtn.addEventListener('click', closeModal);
@@ -157,12 +170,7 @@ function showCaptureModal(data) {
           console.warn('Save button not found');
         }
         
-        // Close modal when clicking outside
-        modal.addEventListener('click', (e) => {
-          if (e.target === modal) {
-            closeModal();
-          }
-        });
+        // No click-outside-to-close for floating tooltip (too easy to accidentally trigger)
 
         // Focus on comment textarea and add Enter key handler
         if (commentArea) {
@@ -174,11 +182,14 @@ function showCaptureModal(data) {
             }
           }, 100);
           
-          // Handle Enter key to save note (Ctrl+Enter or just Enter)
+          // Handle keyboard shortcuts: Enter to save, Escape to cancel
           commentArea.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               saveNote(data);
+            }
+            if (e.key === 'Escape') {
+              closeModal();
             }
           });
         } else {
@@ -186,6 +197,10 @@ function showCaptureModal(data) {
         }
         
         console.log('Modal setup complete');
+        
+        // Just warm cache in background (no AI suggestions blocking the UI)
+        warmCache();
+        
       } catch (setupError) {
         console.error('Error setting up modal event listeners:', setupError);
         showNotification('Modal setup failed, but modal is visible', 'error');
@@ -205,19 +220,262 @@ function closeModal() {
   }
 }
 
+// 🚀 BACKGROUND AI PROCESSING
+async function processNoteWithAI(note, savedNoteId = null) {
+  /**
+   * Process a saved note with AI in the background (non-blocking)
+   * This improves the note with AI-generated title and category
+   */
+  try {
+    console.log('🤖 Background AI: Processing note', note.id);
+    
+    // Prepare request data for AI categorization
+    const requestData = {
+      content: note.text,
+      comment: note.comment,
+      // Don't send existing_categories - let API fetch from Notion
+    };
+    
+    // Use background script to get AI suggestions
+    const result = await chrome.runtime.sendMessage({
+      action: 'categorizeContent',
+      data: requestData
+    });
+    
+    if (result && result.success && result.data) {
+      const { title: aiTitle, category: aiCategory, confidence, is_new } = result.data;
+      
+      console.log('🤖 Background AI: Got suggestions', { aiTitle, aiCategory, confidence });
+      
+      // Update the note with AI suggestions (only if user didn't provide)
+      const updatedNote = {
+        ...note,
+        title: note.title === generateFallbackTitle(note.text) ? aiTitle : note.title, // Only replace fallback title
+        category: note.category === 'General' ? aiCategory : note.category, // Only replace default category
+        aiProcessed: true,
+        aiConfidence: confidence,
+        aiSuggestions: {
+          originalTitle: note.title,
+          originalCategory: note.category,
+          aiTitle: aiTitle,
+          aiCategory: aiCategory,
+          isNewCategory: is_new
+        }
+      };
+      
+      // Save the updated note (this will sync to Notion with better data)
+      chrome.runtime.sendMessage({
+        action: 'updateNoteWithAI',
+        noteId: savedNoteId || note.id,
+        updatedNote: updatedNote
+      }, (updateResponse) => {
+        if (updateResponse && updateResponse.success) {
+          console.log('🤖 Background AI: Note updated successfully');
+          showNotification(`✨ AI improved your note: "${aiTitle}" → ${aiCategory}`, 'success');
+        } else {
+          console.warn('🤖 Background AI: Failed to update note:', updateResponse?.error);
+        }
+      });
+      
+    } else {
+      console.warn('🤖 Background AI: Failed to get suggestions:', result?.error);
+      // Don't show error to user - this is background processing
+    }
+    
+  } catch (error) {
+    console.error('🤖 Background AI: Processing failed:', error);
+    // Don't show error to user - this is background processing
+  }
+}
+
+async function getAISuggestions(data) {
+  const titleInput = document.getElementById('smart-notes-title');
+  const categoryInput = document.getElementById('smart-notes-category');
+  const loadingIndicator = document.getElementById('smart-notes-ai-loading');
+  
+  if (!titleInput || !categoryInput || !loadingIndicator) {
+    console.warn('AI suggestion elements not found');
+    return;
+  }
+  
+  try {
+    console.log('Getting AI suggestions for:', data.text.substring(0, 100) + '...');
+    
+    // Show loading state
+    loadingIndicator.style.display = 'flex';
+    
+    // Prepare request data
+    const requestData = {
+      content: data.text,
+      comment: '', // No comment yet since user hasn't typed it
+      // Don't send existing_categories - let API fetch from Notion
+    };
+    
+    // Use background script to make API call (bypasses CORS)
+    console.log('🚀 Sending categorization request to background script');
+    console.log('📦 Request data:', requestData);
+    
+    const result = await chrome.runtime.sendMessage({
+      action: 'categorizeContent',
+      data: requestData
+    });
+    
+    console.log('📡 Background script response:', result);
+    
+    if (!result || !result.success) {
+      throw new Error(result?.error || 'Background script request failed');
+    }
+    console.log('AI suggestions received:', result);
+    
+    if (result.success && result.data) {
+      const { title, category, confidence, is_new } = result.data;
+      
+      // Update title field
+      if (title) {
+        titleInput.value = title;
+        titleInput.disabled = false;
+        titleInput.placeholder = 'Edit title if needed...';
+      }
+      
+      // Update category field
+      if (category) {
+        categoryInput.value = category;
+        categoryInput.disabled = false;
+        categoryInput.placeholder = 'Edit category if needed...';
+        
+        // Update AI indicator to show if it's a new category
+        const categoryIndicator = categoryInput.parentNode.querySelector('.smart-notes-ai-indicator');
+        if (categoryIndicator) {
+          if (is_new) {
+            categoryIndicator.textContent = '✨ New category suggested';
+            categoryIndicator.style.color = '#28a745'; // Green for new
+          } else {
+            categoryIndicator.textContent = '✨ Existing category matched';
+            categoryIndicator.style.color = '#007bff'; // Blue for existing
+          }
+        }
+      }
+      
+      // Show confidence in console
+      console.log(`AI confidence: ${confidence}, New category: ${is_new}`);
+      
+      // Hide loading indicator
+      loadingIndicator.style.display = 'none';
+      
+      // Show success briefly
+      showNotification(`✨ AI suggestions ready (${Math.round(confidence * 100)}% confidence)`, 'info');
+      
+    } else {
+      throw new Error(result.message || 'No suggestions received');
+    }
+    
+  } catch (error) {
+    console.error('Failed to get AI suggestions:', error);
+    
+    // CRITICAL: Hide loading indicator and clear placeholders
+    loadingIndicator.style.display = 'none';
+    
+    // Fallback to basic categorization
+    const fallbackCategory = suggestCategory(data.url);
+    const fallbackTitle = generateFallbackTitle(data.text);
+    
+    // Update title field completely
+    titleInput.value = fallbackTitle;
+    titleInput.disabled = false;
+    titleInput.placeholder = 'Edit title if needed...';
+    
+    // Update category field completely (CLEAR the "Analyzing content..." placeholder)
+    categoryInput.value = fallbackCategory;
+    categoryInput.disabled = false;
+    categoryInput.placeholder = 'Edit category if needed...';
+    
+    // Update indicators to show fallback mode
+    const titleIndicator = titleInput.parentNode.querySelector('.smart-notes-ai-indicator');
+    const categoryIndicator = categoryInput.parentNode.querySelector('.smart-notes-ai-indicator');
+    
+    if (titleIndicator) {
+      titleIndicator.textContent = '📝 Basic suggestion';
+      titleIndicator.style.color = '#666';
+    }
+    if (categoryIndicator) {
+      categoryIndicator.textContent = '📝 URL-based suggestion';
+      categoryIndicator.style.color = '#666';
+    }
+    
+    // Show more detailed error information
+    console.log('AI Error details:', error);
+    showNotification('AI unavailable - using basic suggestions', 'info');
+  }
+}
+
+function generateFallbackTitle(text) {
+  // Generate simple title from first few words
+  const words = text.split(/\s+/).slice(0, 4);
+  let title = words.join(' ');
+  
+  // Capitalize first letter
+  if (title) {
+    title = title.charAt(0).toUpperCase() + title.slice(1);
+  }
+  
+  // Limit length
+  if (title.length > 30) {
+    title = title.substring(0, 27) + '...';
+  }
+  
+  return title || 'Saved Content';
+}
+
+async function warmCacheAndGetSuggestions(data) {
+  /**
+   * OPTIMIZATION: Warm cache first (if needed), then get AI suggestions
+   * This reduces latency for subsequent requests
+   */
+  try {
+    console.log('Starting optimized categorization with cache warming...');
+    
+    // **Step 1: Try to warm cache in parallel with AI suggestions** 
+    const warmCachePromise = warmCache();
+    const aiSuggestionsPromise = getAISuggestions(data);
+    
+    // Run both in parallel - cache warming is fire-and-forget
+    await Promise.allSettled([warmCachePromise, aiSuggestionsPromise]);
+    
+  } catch (error) {
+    console.error('Optimized categorization failed:', error);
+    // Fallback to just AI suggestions
+    await getAISuggestions(data);
+  }
+}
+
+async function warmCache() {
+  /**
+   * Warm the category cache for faster subsequent requests
+   * This is a fire-and-forget operation that improves performance
+   */
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: 'warmCache'
+    });
+    
+    if (result && result.success) {
+      console.log('✅ Category cache warmed successfully');
+    } else {
+      console.log('⚠️ Cache warming failed, but continuing...');
+    }
+  } catch (error) {
+    console.log('⚠️ Cache warming failed (network issue), but continuing...');
+    // Don't throw - this is optional optimization
+  }
+}
+
 function saveNote(data) {
   const comment = document.getElementById('smart-notes-comment').value.trim();
-  const saveBtn = document.getElementById('smart-notes-save');
-  const cancelBtn = document.getElementById('smart-notes-cancel');
+  const saveBtn = document.querySelector('.smart-notes-save-btn') || document.getElementById('smart-notes-save');
 
-  // Show loading state
+  // Disable button briefly to prevent double-clicks
   if (saveBtn) {
     saveBtn.disabled = true;
-    saveBtn.textContent = 'Saving...';
-    saveBtn.style.opacity = '0.7';
-  }
-  if (cancelBtn) {
-    cancelBtn.disabled = true;
   }
 
   const note = {
@@ -225,63 +483,38 @@ function saveNote(data) {
     text: data.text,
     comment: comment,
     url: data.url,
-    title: data.title,
+    title: generateFallbackTitle(data.text), // Temporary title until AI processes
     timestamp: new Date().toISOString(),
-    category: suggestCategory(data.url)
+    category: 'General', // Temporary category until AI processes
+    aiProcessed: false, // Will be updated when background AI processing completes
+    needsAI: true // Always need AI since no user inputs
   };
 
   console.log('Content: Saving note:', note);
 
-  // Send to background script for storage
+  // INSTANT FEEDBACK: Close tooltip and show notification immediately
+  showNotification('📝 Captured!', 'success');
+  closeModal();
+
+  // Send to background script for storage (happens async)
   chrome.runtime.sendMessage({
     action: 'saveNote',
     note: note
   }, (response) => {
     console.log('Content: Save response:', response);
     
-    // Reset button states
-    if (saveBtn) {
-      saveBtn.disabled = false;
-      saveBtn.textContent = 'Save Note';
-      saveBtn.style.opacity = '1';
-    }
-    if (cancelBtn) {
-      cancelBtn.disabled = false;
-    }
-
     if (response && response.success) {
       console.log('Content: Note saved successfully via:', response.method);
       console.log('Content: Sync status:', response.syncStatus);
-      
-      // Show detailed success message based on sync status
-      let notificationMessage = '✓ Note saved locally';
-      if (response.syncStatus === 'notion_synced') {
-        notificationMessage = '🎉 Note saved and synced to Notion!';
-      } else if (response.syncStatus === 'notion_pending') {
-        notificationMessage = '⏳ Note saved, syncing to Notion...';
-      } else if (response.syncStatus === 'notion_failed') {
-        notificationMessage = '⚠️ Note saved locally, Notion sync failed';
-      } else if (response.method === 'api') {
-        notificationMessage = '✓ Note saved to server';
-      }
-      
-      showNotification(notificationMessage, 'success');
       
       // Log Notion page ID if available
       if (response.notionPageId) {
         console.log('Content: Notion page created:', response.notionPageId);
       }
-      
-      // Close modal after short delay
-      setTimeout(() => {
-        closeModal();
-      }, 2000); // Slightly longer delay to read the Notion status
     } else {
       console.error('Content: Failed to save note:', response?.error);
-      
-      // Show error message
-      const errorMsg = response?.error || 'Unknown error occurred';
-      showNotification(`✗ Failed to save: ${errorMsg}`, 'error');
+      // Show error notification if save actually failed
+      showNotification('❌ Save failed - will retry', 'error');
     }
   });
 }
@@ -289,6 +522,14 @@ function saveNote(data) {
 // Show notification messages to user
 function showNotification(message, type = 'info') {
   try {
+    // Remove any existing notifications first (only one at a time)
+    const existingNotifications = document.querySelectorAll('.smart-notes-notification');
+    existingNotifications.forEach(notif => {
+      if (notif.parentNode) {
+        notif.parentNode.removeChild(notif);
+      }
+    });
+    
     // Create notification element
     const notification = document.createElement('div');
     notification.className = `smart-notes-notification ${type}`;
@@ -302,7 +543,7 @@ function showNotification(message, type = 'info') {
       return;
     }
 
-    // Auto-remove after 3 seconds
+    // Auto-remove after 2 seconds (faster)
     setTimeout(() => {
       if (notification.parentNode) {
         notification.classList.add('slide-out');
@@ -310,9 +551,9 @@ function showNotification(message, type = 'info') {
           if (notification.parentNode) {
             notification.parentNode.removeChild(notification);
           }
-        }, 300);
+        }, 200);
       }
-    }, 3000);
+    }, 2000);
   } catch (error) {
     console.error('Error showing notification:', error);
     // Fallback to console log if notification fails

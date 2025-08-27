@@ -20,6 +20,8 @@ from app.schemas.note import (
 )
 from app.config import settings
 from app.services.notion_service import NotionServiceContext, NotionServiceError
+from app.services.ai_categorization import get_category_ai, CategorySuggestion
+from app.services.category_extractor import extract_existing_categories, warm_category_cache, clear_category_cache
 
 logger = logging.getLogger(__name__)
 
@@ -148,9 +150,9 @@ async def create_note(
                     sync_to_notion(notion_data, notion_token, notion_database_id)
                 )
                 
-                # Give Notion sync a brief moment to complete (max 2 seconds)
+                # Give Notion sync a very brief moment to complete (max 1 second)
                 try:
-                    notion_page_id = await asyncio.wait_for(notion_task, timeout=2.0)
+                    notion_page_id = await asyncio.wait_for(notion_task, timeout=1.0)
                     if notion_page_id:
                         # Update note record with Notion success
                         note_record["sync_status"] = "notion_synced"
@@ -427,4 +429,201 @@ async def get_notes_stats() -> ORJSONResponse:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get statistics"
+        )
+
+
+@router.post("/categorize",
+             summary="Suggest category for content",
+             description="Use AI to suggest the best category for content")
+async def categorize_content(
+    request: Request,
+    notion_token: Optional[str] = Header(None, alias="X-Notion-Token", description="Notion integration token"),
+    notion_database_id: Optional[str] = Header(None, alias="X-Notion-Database-Id", description="Notion database ID")
+) -> ORJSONResponse:
+    """
+    Suggest a category for content using AI (Phi3 via Ollama)
+    
+    Expects JSON body:
+    {
+        "content": "The text content to categorize",
+        "comment": "Optional user comment",
+        "existing_categories": ["cat1", "cat2"] // Optional, will fetch from Notion if not provided
+    }
+    """
+    try:
+        # Parse request body
+        body = await request.json()
+        content = body.get("content", "").strip()
+        comment = body.get("comment", "").strip()
+        existing_categories = body.get("existing_categories")
+        
+        # Validate content
+        if not content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Content is required for categorization"
+            )
+        
+        # **OPTIMIZATION: Parallel execution of category fetching and AI categorization**
+        async def fetch_categories():
+            """Fetch existing categories with caching"""
+            if existing_categories is not None:
+                return existing_categories
+                
+            try:
+                # Try to get from Notion if tokens provided
+                if notion_token and notion_database_id:
+                    logger.info("Fetching existing categories from Notion database (cached)")
+                    return await extract_existing_categories(notion_token, notion_database_id)
+                else:
+                    # Use config defaults
+                    if settings.notion_token and settings.notion_database_id:
+                        logger.info("Using config tokens to fetch categories (cached)")
+                        return await extract_existing_categories(
+                            settings.notion_token, 
+                            settings.notion_database_id
+                        )
+                    else:
+                        logger.warning("No Notion credentials available, using default categories")
+                        return ["General", "Research", "Development", "Articles", "Tech News"]
+                        
+            except Exception as e:
+                logger.warning(f"Failed to fetch existing categories: {e}")
+                return ["General", "Research", "Development", "Articles", "Tech News"]
+        
+        async def get_ai_suggestion(categories_list):
+            """Get AI categorization suggestion"""
+            category_ai = get_category_ai()
+            return await category_ai.suggest_category(
+                content=content,
+                comment=comment,
+                existing_categories=categories_list
+            )
+        
+        # **TRUE PARALLEL EXECUTION - Start both simultaneously**
+        logger.info("Starting true parallel execution (categories + AI)")
+        start_time = asyncio.get_event_loop().time()
+        
+        try:
+            # CRITICAL FIX: Always fetch categories FIRST, then pass to AI
+            existing_categories = await fetch_categories()
+            logger.info(f"✅ Fetched {len(existing_categories)} existing categories: {existing_categories}")
+            
+            # Run AI with the actual existing categories (not empty list)
+            suggestion = await get_ai_suggestion(existing_categories)
+            logger.info(f"✅ AI suggestion completed: {suggestion.category} (confidence: {suggestion.confidence})")
+                
+        except Exception as e:
+            logger.error(f"Parallel execution failed: {e}")
+            # Simple sequential fallback
+            existing_categories = await fetch_categories()
+            suggestion = await get_ai_suggestion(existing_categories)
+        
+        elapsed_time = asyncio.get_event_loop().time() - start_time
+        logger.info(f"Categorization completed in {elapsed_time:.2f}s with {len(existing_categories)} categories")
+        
+        # Format response
+        response_data = {
+            "category": suggestion.category,
+            "title": suggestion.title,
+            "confidence": suggestion.confidence,
+            "is_new": suggestion.is_new,
+            "reasoning": suggestion.reasoning,
+            "existing_categories": existing_categories
+        }
+        
+        logger.info(f"Categorization complete: {suggestion.category} (confidence: {suggestion.confidence})")
+        
+        return ORJSONResponse(
+            content={
+                "success": True,
+                "message": "Category suggestion generated successfully",
+                "data": response_data
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Categorization failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate category suggestion"
+        )
+
+
+@router.post("/warm-cache",
+             summary="Warm category cache",
+             description="Pre-load categories to improve categorization speed")
+async def warm_category_cache_endpoint(
+    notion_token: Optional[str] = Header(None, alias="X-Notion-Token"),
+    notion_database_id: Optional[str] = Header(None, alias="X-Notion-Database-Id")
+) -> ORJSONResponse:
+    """
+    Warm the category cache for faster subsequent categorization requests.
+    Call this when the extension loads or when you want to refresh the cache.
+    """
+    try:
+        # Determine which credentials to use
+        token = notion_token or settings.notion_token
+        database_id = notion_database_id or settings.notion_database_id
+        
+        if not token or not database_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Notion token and database ID required"
+            )
+        
+        # Warm the cache
+        success = await warm_category_cache(token, database_id)
+        
+        if success:
+            return ORJSONResponse(
+                content={
+                    "success": True,
+                    "message": "Category cache warmed successfully",
+                    "cache_duration_minutes": 10
+                }
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to warm category cache"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Cache warming failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to warm cache"
+        )
+
+
+@router.delete("/clear-cache",
+               summary="Clear category cache",
+               description="Clear the category cache to force fresh data")
+async def clear_cache_endpoint(
+    notion_database_id: Optional[str] = Header(None, alias="X-Notion-Database-Id")
+) -> ORJSONResponse:
+    """
+    Clear the category cache. Useful when you've added new categories manually in Notion.
+    """
+    try:
+        database_id = notion_database_id or settings.notion_database_id
+        clear_category_cache(database_id)
+        
+        return ORJSONResponse(
+            content={
+                "success": True,
+                "message": "Category cache cleared successfully"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Cache clearing failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to clear cache"
         )

@@ -44,7 +44,11 @@ class NotionService:
         if not token:
             raise ValueError("Notion token is required")
         
-        self.client = Client(auth=token)
+        # Initialize client with faster timeouts
+        self.client = Client(
+            auth=token,
+            timeout_ms=10000,  # 10 second timeout instead of default 30
+        )
         self.rate_limiter = NotionRateLimiter()
         self.database_cache = {}  # Cache database IDs to avoid repeated lookups
         

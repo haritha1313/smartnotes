@@ -50,9 +50,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Process request
         response = await call_next(request)
         
-        # Add security headers
-        for header, value in SECURITY_HEADERS.items():
-            response.headers[header] = value
+        # Don't add security headers here - let SecurityHeadersMiddleware handle this
+        # to avoid header conflicts
         
         return response
     
@@ -179,17 +178,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         for header, value in SECURITY_HEADERS.items():
             response.headers[header] = value
         
-        # Add CORS headers if needed
-        origin = request.headers.get("origin")
-        if origin and self._is_allowed_origin(origin):
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Credentials"] = "true"
+        # Don't add CORS headers here - let FastAPI CORSMiddleware handle CORS
+        # This prevents conflicts between manual CORS headers and CORSMiddleware
         
         return response
-    
-    def _is_allowed_origin(self, origin: str) -> bool:
-        """Check if origin is in allowed list"""
-        for allowed in settings.allowed_origins:
-            if allowed == "*" or origin == allowed or origin.startswith(allowed.replace("*", "")):
-                return True
-        return False
