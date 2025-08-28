@@ -116,8 +116,11 @@ function showCaptureModal(data) {
         <textarea id="smart-notes-comment" 
                  placeholder="💬 Add comment (optional)... Press Enter to save!" 
                  rows="1"></textarea>
-        <button id="smart-notes-save" class="smart-notes-save-btn">💾</button>
-        <button class="smart-notes-close">&times;</button>
+        <button id="smart-notes-save" class="smart-notes-save-btn" title="Save Note">
+          <span class="save-icon">💾</span>
+          <span class="save-text">Save</span>
+        </button>
+        <button class="smart-notes-close" title="Close">&times;</button>
       </div>
       <div class="smart-notes-ai-hint">
         🤖 AI will categorize automatically
@@ -247,13 +250,15 @@ async function processNoteWithAI(note, savedNoteId = null) {
       
       console.log('🤖 Background AI: Got suggestions', { aiTitle, aiCategory, confidence });
       
-      // Update the note with AI suggestions (only if user didn't provide)
+      // Update the note with AI suggestions
       const updatedNote = {
         ...note,
-        title: note.title === generateFallbackTitle(note.text) ? aiTitle : note.title, // Only replace fallback title
+        title: aiTitle, // Always use AI title
+
         category: note.category === 'General' ? aiCategory : note.category, // Only replace default category
         aiProcessed: true,
         aiConfidence: confidence,
+
         aiSuggestions: {
           originalTitle: note.title,
           originalCategory: note.category,
@@ -377,7 +382,7 @@ async function getAISuggestions(data) {
     
     // Fallback to basic categorization
     const fallbackCategory = suggestCategory(data.url);
-    const fallbackTitle = generateFallbackTitle(data.text);
+    const fallbackTitle = data.text.split(/\s+/).slice(0, 4).join(' ') || 'Saved Content';
     
     // Update title field completely
     titleInput.value = fallbackTitle;
@@ -408,23 +413,7 @@ async function getAISuggestions(data) {
   }
 }
 
-function generateFallbackTitle(text) {
-  // Generate simple title from first few words
-  const words = text.split(/\s+/).slice(0, 4);
-  let title = words.join(' ');
-  
-  // Capitalize first letter
-  if (title) {
-    title = title.charAt(0).toUpperCase() + title.slice(1);
-  }
-  
-  // Limit length
-  if (title.length > 30) {
-    title = title.substring(0, 27) + '...';
-  }
-  
-  return title || 'Saved Content';
-}
+
 
 async function warmCacheAndGetSuggestions(data) {
   /**
@@ -483,11 +472,13 @@ function saveNote(data) {
     text: data.text,
     comment: comment,
     url: data.url,
-    title: generateFallbackTitle(data.text), // Temporary title until AI processes
+    title: data.title || 'Saved Content', // Use webpage title or fallback
+
     timestamp: new Date().toISOString(),
     category: 'General', // Temporary category until AI processes
     aiProcessed: false, // Will be updated when background AI processing completes
-    needsAI: true // Always need AI since no user inputs
+    needsAI: true, // Always need AI since no user inputs
+    titleSource: data.title ? 'webpage' : 'fallback' // Track title source
   };
 
   console.log('Content: Saving note:', note);

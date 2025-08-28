@@ -205,9 +205,9 @@ async function saveNote(note) {
   try {
     let finalNote = note;
     
-    // If note needs AI processing, do it first
+    // If note needs AI processing, do it first BEFORE any API calls
     if (note.needsAI) {
-      console.log('Background: Processing note with AI first...');
+      console.log('Background: 🤖 Processing note with AI first (BLOCKING API save until complete)...');
       
       try {
         const aiResult = await handleCategorizeContent({
@@ -218,6 +218,13 @@ async function saveNote(note) {
         if (aiResult && aiResult.success && aiResult.data) {
           const { title: aiTitle, category: aiCategory } = aiResult.data;
           
+          console.log('Background: ✅ AI processing successful');
+          console.log('Background: Full AI Response:', aiResult);
+          console.log('Background: AI Response Data:', aiResult.data);
+          console.log('Background: Extracted aiTitle:', aiTitle);
+          console.log('Background: Extracted aiCategory:', aiCategory);
+          console.log('Background: Original note title:', note.title);
+          
           // Update note with AI improvements
           finalNote = {
             ...note,
@@ -227,12 +234,19 @@ async function saveNote(note) {
             needsAI: false
           };
           
+          console.log('Background: Final note title after AI processing:', finalNote.title);
           console.log('Background: AI processing complete, enhanced note:', finalNote);
         } else {
-          console.warn('Background: AI processing failed, using original note');
+          console.warn('Background: ❌ AI processing failed, using original note');
+          console.warn('Background: AI Result:', aiResult);
+          console.warn('Background: AI Success:', aiResult?.success);
+          console.warn('Background: AI Data:', aiResult?.data);
+          console.warn('Background: AI Error:', aiResult?.error);
         }
       } catch (aiError) {
-        console.warn('Background: AI processing error, using original note:', aiError);
+        console.error('Background: ❌ AI processing exception, using original note:', aiError);
+        console.error('Background: Error details:', aiError.message);
+        console.error('Background: Stack:', aiError.stack);
       }
     }
     
@@ -322,7 +336,9 @@ async function saveNoteToAPI(note) {
       timestamp: note.timestamp
     };
     
-    console.log('Background: Sending to API:', apiNote);
+    console.log('Background: 📤 Sending to API:', apiNote);
+    console.log('Background: 📤 Note title being sent:', apiNote.title);
+    console.log('Background: 📤 Note category being sent:', apiNote.category);
     console.log('Background: Using Notion config:', NOTION_CONFIG.TOKEN ? 'Token present' : 'No token', NOTION_CONFIG.DATABASE_ID ? 'DB ID present' : 'No DB ID');
     
     return await backgroundApiClient.post(API_CONFIG.ENDPOINTS.NOTES, apiNote);
@@ -387,6 +403,7 @@ async function handleCategorizeContent(requestData) {
     
     const result = await response.json();
     console.log('Background: AI categorization successful');
+    console.log('Background: Full AI response:', result);
     return result;
     
   } catch (error) {
@@ -439,12 +456,43 @@ async function updateNoteWithAI(noteId, updatedNote) {
       console.log('Background: Note updated in local storage');
     }
     
-    // Don't sync AI improvements to Notion immediately to avoid duplicates
-    // The original note is already saved to Notion with basic info
-    // AI improvements are stored locally and can be synced later if needed
-    console.log('Background: AI improvements stored locally (not syncing to avoid duplicates)');
+    // Update the note in Notion with AI improvements
+    const apiNote = {
+      text: updatedNote.text,
+      comment: updatedNote.comment || '',
+      url: updatedNote.url,
+      title: updatedNote.title,  // This will be the AI title
+      category: updatedNote.category,
+      timestamp: updatedNote.timestamp,
+
+    };
     
-    return { success: true, method: 'local_updated' };
+    console.log('Background: Updating note in Notion with AI improvements:', apiNote);
+    
+    // Make API request to update the note
+    const response = await fetch(`${API_CONFIG.BASE_URL}/api/notes/${noteId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Notion-Token': NOTION_CONFIG.TOKEN,
+        'X-Notion-Database-Id': NOTION_CONFIG.DATABASE_ID
+      },
+      body: JSON.stringify(apiNote)
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to update note in API: ${response.status}`);
+    }
+    
+    const apiResult = await response.json();
+    console.log('Background: Note updated in API:', apiResult);
+    
+    return { 
+      success: true, 
+      method: 'api_updated',
+      syncStatus: apiResult.data?.sync_status || 'updated',
+      notionPageId: apiResult.data?.notion_page_id
+    };
     
   } catch (error) {
     console.error('Background: Failed to update note with AI:', error);

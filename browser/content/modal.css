@@ -395,8 +395,8 @@
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
   color: white !important;
   border: none !important;
-  border-radius: 3px !important;
-  width: 24px !important;
+  border-radius: 4px !important;
+  width: auto !important;
   height: 24px !important;
   cursor: pointer !important;
   font-size: 11px !important;
@@ -405,6 +405,18 @@
   justify-content: center !important;
   transition: all 0.2s ease !important;
   flex-shrink: 0 !important;
+  padding: 0 8px !important;
+  gap: 4px !important;
+  font-weight: 500 !important;
+  white-space: nowrap !important;
+}
+
+.smart-notes-save-btn .save-icon {
+  font-size: 10px !important;
+}
+
+.smart-notes-save-btn .save-text {
+  font-size: 10px !important;
 }
 
 .smart-notes-save-btn:hover {
