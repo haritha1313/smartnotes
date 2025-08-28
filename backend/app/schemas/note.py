@@ -26,7 +26,7 @@ class NoteBase(BaseModel):
         ..., 
         min_length=1, 
         max_length=500,
-        description="Source webpage title"
+        description="Note title (AI-generated or webpage title)"
     )
     category: Optional[str] = Field(
         "General", 
@@ -111,6 +111,7 @@ class NoteUpdate(BaseModel):
         max_length=settings.max_comment_length
     )
     category: Optional[str] = Field(None, max_length=50)
+    title: Optional[str] = Field(None, max_length=500)
     
     @validator('comment')
     def validate_comment_content(cls, v):
@@ -131,6 +132,16 @@ class NoteUpdate(BaseModel):
             raise ValueError('Invalid category format')
         
         return v.strip()[:50]
+        
+    @validator('title')
+    def validate_title_content(cls, v):
+        """Validate title content"""
+        if not v:
+            return v
+        
+        # Clean title
+        cleaned = re.sub(r'<[^>]*>', '', v.strip())
+        return cleaned[:500] if cleaned else None
 
 
 class NotesListResponse(BaseModel):

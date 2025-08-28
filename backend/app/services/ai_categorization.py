@@ -134,34 +134,44 @@ class CategoryAI:
         
         existing_cats_str = ", ".join(existing_categories) if existing_categories else "None"
         
-        prompt = f"""You MUST choose from existing categories. Only create new ones if content is completely unrelated to ALL existing ones.
+        prompt = f"""You should STRONGLY PREFER existing categories, but can create new ones if content truly doesn't fit.
 
 Content: {content}
 
 User Comment: {comment}
 
-EXISTING CATEGORIES YOU MUST USE: {existing_cats_str}
-
-MANDATORY RULES:
-1. You MUST choose from existing categories 95% of the time
-2. Research = ANY studies, papers, analysis, investigations, experiments  
-3. Development = ANY coding, programming, software, apps, technical projects
-4. Articles = ANY blog posts, tutorials, guides, how-tos
-5. General = fallback for anything that doesn't fit other categories
-6. Tech News = technology announcements, updates, releases
+EXISTING CATEGORIES (prefer these): {existing_cats_str}
 
 DECISION PROCESS:
-- Is it about research/studies/analysis? → Use "Research" 
-- Is it about coding/programming/software? → Use "Development"
-- Is it a tutorial/blog/guide? → Use "Articles"
-- Is it tech news/announcements? → Use "Tech News"
-- Doesn't fit any above? → Use "General"
+1. FIRST: Try to match content to existing categories (strongly preferred)
+2. ONLY IF no existing category fits well: create a new descriptive category
+3. Use high confidence (0.8+) for existing categories that fit
+4. Use lower confidence (0.6-0.7) when creating new categories
+
+EXISTING CATEGORY GUIDELINES:
+- Research: studies, papers, analysis, investigations, data, experiments
+- Development: coding, programming, software, apps, tech building, frameworks
+- Articles: tutorials, guides, how-tos, blog posts, explanations, documentation
+- Tech News: announcements, releases, industry news, updates
+- General: miscellaneous content that doesn't fit specialized categories
+
+EXAMPLES:
+- "AI research paper" → "Research" (existing, confidence: 0.9)
+- "Python tutorial" → "Articles" (existing, confidence: 0.9)  
+- "Building a React app" → "Development" (existing, confidence: 0.9)
+- "Cooking recipe" → "Cooking" (new category, confidence: 0.7)
+- "Finance investing tips" → "Finance" (new category, confidence: 0.7)
+
+CREATE NEW CATEGORY ONLY IF:
+- Content is about a specialized domain not covered by existing categories
+- New category would be genuinely useful for organizing similar future content
+- Existing categories would be a poor fit (confidence < 0.5)
 
 Respond EXACTLY in this format:
-Title: [3-5 word title]
-Category: [MUST be from existing categories list above]
-Confidence: [0.0-1.0]
-Reasoning: [why you chose this existing category]"""
+Title: [3-5 word title summarizing the content]
+Category: [existing category name OR new descriptive category]
+Confidence: [0.0-1.0, higher for existing categories]
+Reasoning: [why you chose existing category OR why new category was needed]"""
 
         return prompt
     
@@ -217,6 +227,47 @@ Reasoning: [why you chose this existing category]"""
                 category = category_match
                 logger.warning(f"🔄 FORCED category match: '{category}' (was '{original_category}')")
             
+            # Smart category validation - prefer existing but allow new ones
+            category_lower = category.lower()
+            existing_match = None
+            
+            # Check for exact or close matches with existing categories
+            for existing_cat in existing_categories:
+                existing_lower = existing_cat.lower()
+                
+                # Exact match - use existing
+                if existing_lower == category_lower:
+                    existing_match = existing_cat
+                    break
+                
+                # Smart partial matching - only for very similar cases
+                if confidence > 0.7:  # Only do smart matching for high confidence
+                    # "Machine Learning" → "Research" if it contains research keywords
+                    if ("research" in category_lower or "study" in category_lower or "analysis" in category_lower) and "research" in existing_lower:
+                        existing_match = existing_cat
+                        logger.info(f"🔍 Smart match: '{category}' → '{existing_cat}' (research-related)")
+                        break
+                    
+                    # "Web Development" → "Development" 
+                    if ("development" in category_lower or "programming" in category_lower) and "development" in existing_lower:
+                        existing_match = existing_cat
+                        logger.info(f"🔍 Smart match: '{category}' → '{existing_cat}' (development-related)")
+                        break
+                    
+                    # "Tech Article" → "Articles"
+                    if ("article" in category_lower or "tutorial" in category_lower or "guide" in category_lower) and "article" in existing_lower:
+                        existing_match = existing_cat
+                        logger.info(f"🔍 Smart match: '{category}' → '{existing_cat}' (article-related)")
+                        break
+            
+            # Use existing category if found, otherwise allow new category
+            if existing_match:
+                original_category = category
+                category = existing_match
+                logger.info(f"✅ Using existing category: '{category}' (was '{original_category}')")
+            else:
+                logger.info(f"🆕 Creating new category: '{category}'")
+            
             # Check if category is new
             is_new = category.lower() not in [cat.lower() for cat in existing_categories]
             
@@ -227,17 +278,6 @@ Reasoning: [why you chose this existing category]"""
             
             # Clean up title
             title = title.strip('"\'')  # Remove quotes
-            title = re.sub(r'[^\w\s&.-]', '', title)  # Remove special chars except common ones
-            title = ' '.join(title.split())  # Normalize whitespace
-            
-            # Validate title length (3-5 words)
-            title_words = title.split()
-            if len(title_words) > 5:
-                title = ' '.join(title_words[:5])
-            elif len(title_words) < 2:
-                # Generate fallback title from content
-                content_words = [word for word in category.split() if len(word) > 2][:3]
-                title = ' '.join(content_words) if content_words else "Saved Content"
             
             if not category or len(category) > 50:
                 category = "General"

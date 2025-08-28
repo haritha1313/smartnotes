@@ -56,7 +56,7 @@ class NotionService:
         self.database_schema = {
             "title": [{"text": {"content": "Research Notes"}}],
             "properties": {
-                "Title": {"title": {}},
+                "Name": {"title": {}},  # Using "Name" as the title property key as it's more common in Notion
                 "Content": {"rich_text": {}},
                 "Comment": {"rich_text": {}},
                 "Source": {"url": {}},
@@ -152,11 +152,51 @@ class NotionService:
             logger.error(f"Failed to create Notion database: {e}")
             raise NotionServiceError(f"Database creation failed: {str(e)}")
     
+    async def _get_database_schema(self, database_id: str) -> Dict[str, Any]:
+        """Get the full database schema from Notion"""
+        db = await self._make_request(self.client.databases.retrieve, database_id=database_id)
+        logger.info("Retrieved database schema from Notion:")
+        for prop_name, prop_info in db["properties"].items():
+            logger.info(f"  Property '{prop_name}': type={prop_info['type']}")
+        return db["properties"]
+
+
+
+    async def update_note_page(self, page_id: str, note_data: Dict[str, Any]) -> bool:
+        """Update an existing page in Notion"""
+        try:
+            # Prepare properties to update
+            properties = {
+                "Title": {
+                    "title": [{"text": {"content": note_data["title"]}}]
+                }
+            }
+            
+            # Add other fields if provided
+            if "category" in note_data:
+                properties["Category"] = {
+                    "select": {"name": note_data["category"]}
+                }
+            
+            # Update the page
+            await self._make_request(
+                self.client.pages.update,
+                page_id=page_id,
+                properties=properties
+            )
+            
+            logger.info(f"✅ Updated Notion page: {page_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update Notion page: {e}")
+            return False
+
     async def create_note_page(self, database_id: str, note_data: Dict[str, Any]) -> str:
         """Create a new page in the Research Notes database"""
         try:
             # Validate required fields
-            required_fields = ["text", "url", "title"]
+            required_fields = ["title", "text", "url"]
             for field in required_fields:
                 if not note_data.get(field):
                     raise ValueError(f"Missing required field: {field}")
@@ -165,14 +205,9 @@ class NotionService:
             text_content = str(note_data["text"])[:2000]  # Limit text length
             comment_content = str(note_data.get("comment", ""))[:500]  # Limit comment
             
-            # Generate title from text content (first 100 chars)
-            page_title = text_content[:100].strip()
-            if len(text_content) > 100:
-                page_title += "..."
-            
             properties = {
                 "Title": {
-                    "title": [{"text": {"content": page_title}}]
+                    "title": [{"text": {"content": note_data["title"]}}]
                 },
                 "Content": {
                     "rich_text": [{"text": {"content": text_content}}]
@@ -197,6 +232,7 @@ class NotionService:
                     "rich_text": [{"text": {"content": comment_content}}]
                 }
             
+            # Create the page
             response = await self._make_request(
                 self.client.pages.create,
                 parent={"database_id": database_id},
@@ -204,7 +240,7 @@ class NotionService:
             )
             
             page_id = response["id"]
-            logger.info(f"Created Notion page: {page_id}")
+            logger.info(f"✅ Created Notion page: {page_id}")
             return page_id
             
         except ValueError as e:

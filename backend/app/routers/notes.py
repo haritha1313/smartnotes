@@ -42,16 +42,27 @@ router = APIRouter(
 notes_storage: dict = {}
 
 
-async def sync_to_notion(note_data: dict, notion_token: str = None, database_id: str = None) -> Optional[str]:
+async def sync_to_notion(note_data: dict, notion_token: str = None, database_id: str = None, notion_page_id: str = None) -> Optional[str]:
     """Async function to sync note to Notion (non-blocking)"""
     if not notion_token or not database_id:
         return None
     
     try:
         async with NotionServiceContext(notion_token) as notion:
-            page_id = await notion.create_note_page(database_id, note_data)
-            logger.info(f"Note synced to Notion: {page_id}")
-            return page_id
+            if notion_page_id:
+                # Update existing page
+                success = await notion.update_note_page(notion_page_id, note_data)
+                if success:
+                    logger.info(f"Note updated in Notion: {notion_page_id}")
+                    return notion_page_id
+                else:
+                    logger.warning(f"Failed to update Notion page: {notion_page_id}")
+                    return None
+            else:
+                # Create new page
+                page_id = await notion.create_note_page(database_id, note_data)
+                logger.info(f"Note synced to Notion: {page_id}")
+                return page_id
     except NotionServiceError as e:
         logger.warning(f"Notion sync failed (non-critical): {e}")
         return None
@@ -105,6 +116,12 @@ async def create_note(
         note_id = generate_note_id()
         current_time = datetime.utcnow()
         
+        # DEBUG: Print what we received
+        print(f"\n🔥 API RECEIVED DATA:")
+        print(f"   Title: '{note_data.title}'")
+        print(f"   Text preview: '{note_data.text[:50]}...'")
+        print(f"   Category: '{note_data.category}'")
+        
         # Create note record
         note_record = {
             "id": note_id,
@@ -118,6 +135,9 @@ async def create_note(
             "updated_at": current_time,
             "sync_status": "local"  # Start as local, update if Notion sync succeeds
         }
+        
+        print(f"🔥 CREATED RECORD WITH TITLE: '{note_record['title']}'")
+        print(f"🔥 NOTION_DATA WILL HAVE TITLE: '{note_data.title}'")
         
         # Store note locally first (always succeeds)
         notes_storage[note_id] = note_record
@@ -138,10 +158,17 @@ async def create_note(
                 "text": note_data.text,
                 "comment": note_data.comment,
                 "url": str(note_data.url),
-                "title": note_data.title,
+                "title": note_data.title,  # This will be the AI title from the frontend
+
                 "category": note_data.category or "General",
                 "timestamp": (note_data.timestamp or current_time).isoformat()
             }
+            
+            # Debug logging for title handling
+            logger.info(f"🔍 NOTION SYNC - Title Debug:")
+            logger.info(f"  📝 Title being sent to Notion: '{notion_data['title']}'")
+
+            logger.info(f"  📊 Category: '{notion_data['category']}'")
             
             # Non-blocking Notion sync
             try:
@@ -150,9 +177,9 @@ async def create_note(
                     sync_to_notion(notion_data, notion_token, notion_database_id)
                 )
                 
-                # Give Notion sync a very brief moment to complete (max 1 second)
+                # Wait for Notion sync to complete (increased timeout to avoid duplicates)
                 try:
-                    notion_page_id = await asyncio.wait_for(notion_task, timeout=1.0)
+                    notion_page_id = await asyncio.wait_for(notion_task, timeout=5.0)
                     if notion_page_id:
                         # Update note record with Notion success
                         note_record["sync_status"] = "notion_synced"
@@ -160,27 +187,16 @@ async def create_note(
                         notes_storage[note_id] = note_record
                         response_data["sync_status"] = "notion_synced"
                         response_data["notion_page_id"] = notion_page_id
-                        logger.info(f"Note {note_id} synced to Notion: {notion_page_id}")
+                        logger.info(f"✅ Note {note_id} synced to Notion: {notion_page_id}")
+                    else:
+                        logger.warning(f"⚠️ Notion sync returned no page ID for {note_id}")
+                        response_data["sync_status"] = "notion_failed"
                     
                 except asyncio.TimeoutError:
-                    # Notion sync taking too long, continue in background
-                    logger.info(f"Notion sync timeout for note {note_id}, continuing in background")
-                    response_data["sync_status"] = "notion_pending"
-                    
-                    # Update status when background task completes
-                    def update_on_completion(task):
-                        try:
-                            page_id = task.result()
-                            if page_id:
-                                note_record["sync_status"] = "notion_synced"
-                                note_record["notion_page_id"] = page_id
-                                notes_storage[note_id] = note_record
-                        except Exception as e:
-                            logger.error(f"Background Notion sync failed for {note_id}: {e}")
-                            note_record["sync_status"] = "notion_failed"
-                            notes_storage[note_id] = note_record
-                    
-                    notion_task.add_done_callback(update_on_completion)
+                    # Notion sync taking too long, cancel the task to prevent duplicates
+                    logger.warning(f"⏰ Notion sync timeout for note {note_id}, canceling task")
+                    notion_task.cancel()
+                    response_data["sync_status"] = "notion_timeout"
                     
             except Exception as e:
                 logger.warning(f"Notion sync setup failed for note {note_id}: {e}")
@@ -327,13 +343,15 @@ async def get_note(note_id: str = Depends(validate_note_id)) -> ORJSONResponse:
 @router.put("/{note_id}",
             response_model=ApiResponse,
             summary="Update note", 
-            description="Update an existing note's comment or category")
+            description="Update an existing note's comment, category, or title")
 async def update_note(
     note_update: NoteUpdate,
-    note_id: str = Depends(validate_note_id)
+    note_id: str = Depends(validate_note_id),
+    notion_token: Optional[str] = Header(None, alias="X-Notion-Token"),
+    notion_database_id: Optional[str] = Header(None, alias="X-Notion-Database-Id")
 ) -> ORJSONResponse:
     """
-    Update an existing note
+    Update an existing note and sync changes to Notion
     """
     if note_id not in notes_storage:
         raise HTTPException(
@@ -343,6 +361,7 @@ async def update_note(
     
     try:
         note = notes_storage[note_id]
+        current_time = datetime.utcnow()
         
         # Update fields if provided
         if note_update.comment is not None:
@@ -350,15 +369,55 @@ async def update_note(
         
         if note_update.category is not None:
             note["category"] = note_update.category
+            
+        if note_update.title is not None:
+            note["title"] = note_update.title
         
         # Update timestamp
-        note["updated_at"] = datetime.utcnow()
+        note["updated_at"] = current_time
+        
+        # Prepare response data
+        response_data = {
+            "note_id": note_id,
+            "updated_at": current_time.isoformat(),
+            "sync_status": note.get("sync_status", "local")
+        }
+        
+        # If note was previously synced to Notion, update it there too
+        notion_page_id = note.get("notion_page_id")
+        if notion_page_id and notion_token and notion_database_id:
+            logger.info(f"Updating note in Notion: {notion_page_id}")
+            
+            # Prepare Notion update data
+            notion_data = {
+                "title": note["title"],
+                "category": note["category"]
+            }
+            
+            # Update in Notion
+            try:
+                updated_page_id = await sync_to_notion(
+                    notion_data,
+                    notion_token,
+                    notion_database_id,
+                    notion_page_id
+                )
+                
+                if updated_page_id:
+                    response_data["sync_status"] = "notion_synced"
+                    response_data["notion_page_id"] = updated_page_id
+                else:
+                    response_data["sync_status"] = "notion_failed"
+                
+            except Exception as e:
+                logger.error(f"Failed to update note in Notion: {e}")
+                response_data["sync_status"] = "notion_failed"
         
         return ORJSONResponse(
             content={
                 "success": True,
                 "message": "Note updated successfully",
-                "data": {"note_id": note_id}
+                "data": response_data
             }
         )
         
@@ -511,7 +570,10 @@ async def categorize_content(
             
             # Run AI with the actual existing categories (not empty list)
             suggestion = await get_ai_suggestion(existing_categories)
-            logger.info(f"✅ AI suggestion completed: {suggestion.category} (confidence: {suggestion.confidence})")
+            logger.info(f"✅ AI suggestion completed: {suggestion.category} (confidence: {suggestion.confidence}, is_new: {suggestion.is_new})")
+            
+            if suggestion.is_new:
+                logger.info(f"🆕 Claude created new category: '{suggestion.category}' - will be added to Notion")
                 
         except Exception as e:
             logger.error(f"Parallel execution failed: {e}")
@@ -599,6 +661,17 @@ async def warm_category_cache_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to warm cache"
         )
+
+
+@router.get("/debug/test-logging",
+            summary="Test logging output",
+            description="Test endpoint to verify logging is working")
+async def test_logging() -> ORJSONResponse:
+    """Test logging to verify output is visible"""
+    print("\n🔥🔥🔥 TEST LOGGING ENDPOINT CALLED 🔥🔥🔥")
+    print("If you see this in your terminal, logging is working!")
+    logger.info("Logger test message")
+    return ORJSONResponse(content={"message": "Check your terminal for debug output"})
 
 
 @router.delete("/clear-cache",

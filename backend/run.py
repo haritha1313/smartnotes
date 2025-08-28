@@ -41,17 +41,17 @@ def validate_environment():
 
 def main():
     """Main startup function"""
-    print("🚀 Starting Smart Notes API...")
+    print("Starting Smart Notes API...")
     print(f"   Environment: {settings.environment}")
     print(f"   Debug: {settings.debug}")
     print(f"   Host: {settings.api_host}:{settings.api_port}")
     
     # Validate environment
     if not validate_environment():
-        print("\n❌ Startup aborted due to configuration errors")
+        print("\nStartup aborted due to configuration errors")
         sys.exit(1)
     
-    print("✅ Environment validation passed")
+    print("Environment validation passed")
     
     # Production-optimized uvicorn configuration
     config = {
@@ -75,16 +75,16 @@ def main():
             "http": "httptools",   # Fast HTTP parser
         })
     
-    print(f"🌐 Starting server on http://{settings.api_host}:{settings.api_port}")
-    print(f"📚 API docs: http://{settings.api_host}:{settings.api_port}/docs" if settings.debug else "")
-    print("🔄 Ready to receive requests...")
+    print(f"Starting server on http://{settings.api_host}:{settings.api_port}")
+    print(f"API docs: http://{settings.api_host}:{settings.api_port}/docs" if settings.debug else "")
+    print("Ready to receive requests...")
     
     try:
         uvicorn.run(**config)
     except KeyboardInterrupt:
-        print("\n🛑 Server stopped by user")
+        print("\nServer stopped by user")
     except Exception as e:
-        print(f"\n❌ Server error: {e}")
+        print(f"\nServer error: {e}")
         sys.exit(1)
 
 
